@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir -r consumer-requirements.txt
 
 # Consumer 코드 복사
 COPY consumer/ .
-COPY news_preprocessor.py .
 
 # 헬스체크
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \

@@ -7,7 +7,7 @@ from psycopg2.pool import SimpleConnectionPool
 import psycopg2
 import requests
 from dateutil import parser as date_parser
-from consumer.preprocess import Preprocess  # 기존 전처리 그대로 사용
+from preprocess import Preprocess  # 기존 전처리 그대로 사용
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

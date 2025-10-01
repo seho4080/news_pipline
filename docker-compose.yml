@@ -155,12 +155,16 @@ services:
       dockerfile: docker/consumer.Dockerfile
     container_name: news-consumer
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_INPUT_TOPIC: news-raw
-      KAFKA_OUTPUT_TOPIC: news-processed
+      KAFKA_BOOTSTRAP: kafka:9092
+      IN_TOPIC: news-raw
+      GROUP_ID: python-news-group
       DLQ_TOPIC: news-dlq
-      DATABASE_URL: postgres://${POSTGRES_USER:-newsuser}:${POSTGRES_PASSWORD:-newspass}@postgres:5432/${POSTGRES_DB:-newsdb}
-      ELASTICSEARCH_HOST: elasticsearch:9200
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-newsdb}
+      DB_USERNAME: ${POSTGRES_USER:-newsuser}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-newspass}
+      ES_BASE_URL: http://elasticsearch:9200
+      ES_INDEX: news
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       kafka:

@@ -27,17 +27,10 @@ services:
     environment:
       RSS_FETCH_INTERVAL: 60  # 개발 시 더 짧은 간격
       LOG_LEVEL: DEBUG
-    volumes:
-      - ./producer:/app:ro
-      - ./logs:/app/logs
 
   consumer:
     environment:
       LOG_LEVEL: DEBUG
-    volumes:
-      - ./consumer:/app:ro
-      - ./news_preprocessor.py:/app/news_preprocessor.py:ro
-      - ./logs:/app/logs
 
   postgres:
     ports:
