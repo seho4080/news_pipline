@@ -1,0 +1,59 @@
+# docker-compose.override.yml
+# 개발 환경 전용 설정 오버라이드 파일
+# 이 파일은 개발 시에만 사용되며, 프로덕션 환경에서는 제외됩니다
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      DEBUG: "True"
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend:/app:ro
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+  frontend:
+    volumes:
+      - ./frontend:/app:ro
+    environment:
+      NODE_ENV: development
+      VITE_API_URL: http://localhost:8000/api
+
+  producer:
+    environment:
+      RSS_FETCH_INTERVAL: 60  # 개발 시 더 짧은 간격
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./producer:/app:ro
+      - ./logs:/app/logs
+
+  consumer:
+    environment:
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./consumer:/app:ro
+      - ./news_preprocessor.py:/app/news_preprocessor.py:ro
+      - ./logs:/app/logs
+
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+
+  kafka:
+    ports:
+      - "29092:29092"
+
+  elasticsearch:
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+
+  redis:
+    ports:
+      - "6379:6379"

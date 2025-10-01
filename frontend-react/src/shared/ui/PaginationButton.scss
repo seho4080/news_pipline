@@ -1,0 +1,27 @@
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+
+  button {
+    font-size: 13px;
+    padding: 4px 8px;
+    border: none;
+    background-color: #0c3057;
+    color: white;
+    border-radius: 100px;
+    cursor: pointer;
+
+    &:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+  }
+
+  span {
+    font-size: 14px;
+    color: #333;
+  }
+}

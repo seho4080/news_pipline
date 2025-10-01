@@ -1,0 +1,39 @@
+# Consumer requirements.txt  
+# news_preprocessor.py 및 Kafka 컨슈머를 위한 의존성
+
+# Kafka 클라이언트 (Confluent 버전)
+confluent-kafka==2.5.3
+
+# PostgreSQL 클라이언트
+psycopg2-binary==2.9.10
+
+# HTTP 요청
+requests==2.32.3
+
+# 환경 변수
+python-dotenv==1.0.1
+
+# 날짜 파싱
+python-dateutil==2.9.0.post0
+
+# OpenAI API (AI 전처리용)
+openai==1.82.0
+
+# 텍스트 전처리 및 NLP
+numpy==1.26.4
+pandas==2.2.2
+
+# Elasticsearch 클라이언트
+elasticsearch==8.17.1
+
+# JSON 처리
+orjson==3.10.16
+
+# AI/ML 라이브러리 (임베딩 생성용)
+langchain==0.3.25
+langchain-core==0.3.61
+langchain-openai==0.3.17
+
+# HTTP/네트워킹
+httpx==0.28.1
+aiohttp==3.11.18

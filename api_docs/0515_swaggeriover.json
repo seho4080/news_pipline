@@ -1,0 +1,308 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "뉴스 서비스 API",
+    "version": "1.0.0",
+    "description": "회원가입, 로그인, 뉴스 읽기/좋아요 기능 포함 REST API 명세서"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000"
+    }
+  ],
+  "paths": {
+    "/api/members/signup/": {
+      "post": {
+        "summary": "회원가입",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "CREATED"
+          }
+        }
+      },
+      "get": {
+        "summary": "대시보드 조회",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SUCCESS"
+          }
+        }
+      }
+    },
+    "/api/members/news/": {
+      "get": {
+        "summary": "읽은 기사 목록",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SUCCESS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArticleListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/news/": {
+      "get": {
+        "summary": "뉴스 목록 조회",
+        "responses": {
+          "200": {
+            "description": "SUCCESS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArticleListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/news/{article_id}/": {
+      "get": {
+        "summary": "뉴스 상세 페이지 조회 (조회수 증가 포함)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "article_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SUCCESS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Article"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/news/{article_id}/likes/": {
+      "put": {
+        "summary": "좋아요",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "article_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "CREATED"
+          }
+        }
+      },
+      "delete": {
+        "summary": "좋아요 취소",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "article_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "NO CONTENT"
+          }
+        }
+      }
+    },
+    "/api/news/likes/": {
+      "get": {
+        "summary": "좋아요한 기사 목록",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SUCCESS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArticleListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login/": {
+      "post": {
+        "summary": "로그인",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SUCCESS"
+          }
+        }
+      }
+    },
+    "/api/auth/logout/": {
+      "post": {
+        "summary": "로그아웃",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SUCCESS"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "ArticleListResponse": {
+        "type": "object",
+        "properties": {
+          "article_list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Article"
+            }
+          }
+        }
+      },
+      "Article": {
+        "type": "object",
+        "properties": {
+          "article_id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "writer": {
+            "type": "string"
+          },
+          "write_date": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "type": "string"
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "content": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "is_like": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "total_like": {
+            "type": "integer"
+          },
+          "total_read": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

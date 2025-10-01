@@ -1,0 +1,82 @@
+# docker-compose.prod.yml
+# 프로덕션 환경 전용 설정
+# 사용법: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      DEBUG: "False"
+      LOG_LEVEL: WARNING
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  frontend:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  producer:
+    restart: always
+    environment:
+      RSS_FETCH_INTERVAL: 300
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  consumer:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:Z
+
+  kafka:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  elasticsearch:
+    restart: always
+    environment:
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+
+  redis:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M

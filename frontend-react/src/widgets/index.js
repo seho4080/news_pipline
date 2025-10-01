@@ -1,0 +1,5 @@
+export { NewsListWidget } from './news-list/NewsListWidget'
+export { CommentSectionWidget } from './comment-section/CommentSectionWidget'  
+export { DashboardChartsWidget } from './dashboard-charts/DashboardChartsWidget'
+export { ChatbotWidget } from './chatbot'
+export { TheHeader, TheFooter } from './navigation'

@@ -1,0 +1,27 @@
+# Producer requirements.txt
+# RSS 뉴스 수집 및 Kafka 전송을 위한 의존성
+
+# Kafka 클라이언트
+kafka-python==2.0.2
+
+# RSS 파싱
+feedparser==6.0.11
+
+# HTTP 요청
+requests==2.32.3
+
+# HTML 파싱
+beautifulsoup4==4.12.3
+
+# 환경 변수
+python-dotenv==1.0.1
+
+# 표준 라이브러리 (이미 포함됨)
+# - json
+# - time  
+# - logging
+# - urllib.request
+# - ssl
+# - re
+# - os
+# - datetime

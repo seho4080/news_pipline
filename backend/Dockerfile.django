@@ -1,0 +1,46 @@
+# Dockerfile.django
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Seoul
+
+# 런타임 필수 라이브러리만 (DB/이미지 처리)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    libpq5 \
+    libjpeg62-turbo \
+    zlib1g \
+    libpng16-16 \
+    libfreetype6 \
+  && rm -rf /var/lib/apt/lists/*
+
+# 앱 디렉토리
+WORKDIR /app
+
+# 요구사항만 먼저 복사 → 캐시 최대화
+COPY requirements.txt /app/requirements.txt
+
+# 파이썬 패키지 설치 (휠 사용 전제)
+RUN pip install --upgrade pip \
+ && pip install -r requirements.txt
+
+# 앱 소스 복사
+COPY . /app
+
+# 정적파일/마이그레이션 자동화용 엔트리포인트
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# 헬스체크(장고 헬스엔드포인트 사용 권장)
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
+  CMD curl -fsS http://localhost:8000/health || exit 1
+
+# 비루트 유저 (선택)
+RUN useradd -u 1001 -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# 기본 실행: gunicorn
+CMD ["/entrypoint.sh"]

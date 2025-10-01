@@ -1,0 +1,21 @@
+# Producer requirements.txt
+# RSS 피드 크롤링 및 Kafka 프로듀싱을 위한 최소 의존성
+
+# Kafka 클라이언트
+kafka-python==2.0.2
+
+# RSS 피드 파싱
+feedparser==6.0.11
+
+# HTML 파싱 (뉴스 본문 추출)
+beautifulsoup4==4.12.3
+lxml==4.9.3
+
+# HTTP 요청
+requests==2.32.3
+
+# 환경 변수
+python-dotenv==1.0.1
+
+# 로깅 및 유틸리티
+schedule==1.2.0
