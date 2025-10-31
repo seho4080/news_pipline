@@ -41,6 +41,7 @@ with DAG(
     move_daily = PythonOperator(
         task_id = 'move_daily_data_task',
         python_callable = move_daily_data.move_file,
+        provide_context=True,  # ✅ Airflow context 전달
     )
 
     # 완료 알림

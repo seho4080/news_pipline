@@ -27,18 +27,32 @@ def main(report_date_str):
     font_prop = fm.FontProperties(fname=FONT_PATH, size=12)
     plt.rcParams['font.family'] = 'NanumGothic'
 
-    spark = SparkSession.builder \
-            .appName("DailyNewsReport") \
-            .getOrCreate()
-    # spark로 json 데이터 읽기
-    df = spark.read.json(INPUT_PATH)
-    # 데이터 잘 들어왔나 체크
-    # df.show(5, truncate=False)
+    try:
+        spark = SparkSession.builder \
+                .appName("DailyNewsReport") \
+                .getOrCreate()
+    except Exception as e:
+        print(f"❌ Spark 세션 생성 실패: {e}")
+        return
+    
+    try:
+        # spark로 json 데이터 읽기
+        df = spark.read.json(INPUT_PATH)
+        print(f"📊 읽어온 데이터 수: {df.count()}")
+    except Exception as e:
+        print(f"❌ JSON 데이터 읽기 실패: {e}")
+        spark.stop()
+        return
 
     # 날짜 컬럼 정제
-    df = df.withColumn("date", to_date("write_date"))
-    df_keywords = df.withColumn("clean_keywords", regexp_replace(col("keywords"), '^"|"$', ''))
-    df_keywords = df_keywords.withColumn("keyword", explode(split("clean_keywords", ",")))
+    try:
+        df = df.withColumn("date", to_date("write_date"))
+        df_keywords = df.withColumn("clean_keywords", regexp_replace(col("keywords"), '^"|"$', ''))
+        df_keywords = df_keywords.withColumn("keyword", explode(split("clean_keywords", ",")))
+    except Exception as e:
+        print(f"❌ 데이터 전처리 실패: {e}")
+        spark.stop()
+        return
     # -------------------------
     # (1) 시간대별 기사 수
     # 시간 추출
@@ -65,40 +79,66 @@ def main(report_date_str):
     keyword_counts.show()
     Trend_keyword_counts.show()
     
-    # Spark DataFrame ->Pandas로 변환
+    # 데이터 검증
+    total_count = df.count()
+    if total_count == 0:
+        print("⚠️ 경고: 처리할 데이터가 없습니다.")
+        # 빈 리포트 생성
+        with PdfPages(f'{REPORT_DIR}/{report_date_str}_news_analysis_report.pdf') as pdf:
+            plt.figure(figsize=(8, 2))
+            plt.axis('off')
+            plt.title(f"{report_date_str} 뉴스 요약", fontsize=14)
+            plt.text(0.5, 0.5, "처리할 데이터가 없습니다.", ha='center', va='center', fontsize=12)
+            pdf.savefig()
+            plt.close()
+        return
 
+    # Spark DataFrame ->Pandas로 변환
     hours_counts_pd = hours_counts.toPandas()
     category_counts_pd = category_counts.toPandas()
     keyword_counts_pd = keyword_counts.toPandas()
     Trend_keyword_counts_pd = Trend_keyword_counts.toPandas()
-    # combo_pd = combo.toPandas().pivot(index="keyword", columns="category", values="count").fillna(0)
-    top_keyword_counts = keyword_counts_pd.iloc[:20]
-    top_Trend_keywords_pd = Trend_keyword_counts_pd.iloc[:20]
-
-    # (5) 카테고리 + 키워드 조합 (히트맵 or stacked bar)
+    
+    # 데이터 검증
+    if keyword_counts_pd.empty:
+        print("⚠️ 경고: 키워드 데이터가 비어있습니다.")
+        top_keyword_counts = keyword_counts_pd
+        top_Trend_keywords_pd = Trend_keyword_counts_pd
+        top_keywords = []
+        combo_top_pd = pd.DataFrame()
+    else:
+        top_keyword_counts = keyword_counts_pd.iloc[:20]
+        top_Trend_keywords_pd = Trend_keyword_counts_pd.iloc[:20]
+        
+        # (5) 카테고리 + 키워드 조합 (히트맵 or stacked bar)
         # 1. 키워드 등장 빈도 집계
-    top_keywords = keyword_counts_pd.sort_values("article_count", ascending=False).head(20)["keyword"].tolist()
+        top_keywords = keyword_counts_pd.sort_values("article_count", ascending=False).head(20)["keyword"].tolist()
 
         # 2. 원본 Spark DataFrame에서 상위 키워드만 필터링
-    df_top_keywords = df_keywords.filter(col("keyword").isin(top_keywords))
+        df_top_keywords = df_keywords.filter(col("keyword").isin(top_keywords))
 
         # 3. 카테고리-키워드 조합 카운트
-    combo_top = df_top_keywords.groupBy("category", "keyword").agg(count("*").alias("count"))
+        combo_top = df_top_keywords.groupBy("category", "keyword").agg(count("*").alias("count"))
 
         # 4. Pandas 피벗으로 변환
-    combo_top_pd = combo_top.toPandas().pivot(index="keyword", columns="category", values="count").fillna(0)
+        combo_top_pd = combo_top.toPandas().pivot(index="keyword", columns="category", values="count").fillna(0)
 
     
     # PDF 만들기
-    # with PdfPages(f'/home/ssafy/data-pjt-seho-jungrae/batch/data/daily_report/{report_date_str}_news_analysis_report.pdf') as pdf:
+    try:
+        os.makedirs(REPORT_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"디렉토리 생성 실패: {e}")
+        return
+    
     with PdfPages(f'{REPORT_DIR}/{report_date_str}_news_analysis_report.pdf') as pdf:
         #전체 개요 
-        # plt.figure(figsize=(8, 2))
+        plt.figure(figsize=(8, 2))
         plt.subplots_adjust(bottom=0.25)
         plt.axis('off')
         plt.title(f"{report_date_str} 뉴스 요약", fontsize=14)
         data = [
-            ["총 기사 수", len(df_keywords.select("id").distinct().collect())],
+            ["총 기사 수", df.select("url").distinct().count()],  # ✅ url 사용 (unique)
             ["카테고리 수", category_counts_pd.shape[0]],
             ["고유 키워드 수", keyword_counts_pd.shape[0]]
         ]
@@ -158,20 +198,20 @@ def main(report_date_str):
 
 
         # 5번 그래프 
-        plt.figure(figsize=(8, 6))
-        plt.subplots_adjust(bottom=0.25)
-        sns.heatmap(combo_top_pd, annot=True, cmap="YlGnBu")
-        plt.title("카테고리-키워드 조합 히트맵")
-        plt.tight_layout()
-        pdf.savefig()
-        plt.close()
+        if not combo_top_pd.empty:
+            plt.figure(figsize=(8, 6))
+            plt.subplots_adjust(bottom=0.25)
+            try:
+                sns.heatmap(combo_top_pd, annot=True, cmap="YlGnBu", fmt='g')
+                plt.title("카테고리-키워드 조합 히트맵")
+                plt.tight_layout()
+                pdf.savefig()
+            except Exception as e:
+                print(f"히트맵 생성 실패: {e}")
+            finally:
+                plt.close()
         
-
-
-
-    # TODO: 데이터 처리, 리포트 저장, realtime 파일 -> news_archive로 이동 등
-    
-    # realtime에 있는 json파일을 news_archive로 이동 
+    print(f"✅ PDF 리포트 생성 완료: {REPORT_DIR}/{report_date_str}_news_analysis_report.pdf") 
 
 
 if __name__ == "__main__":
@@ -179,7 +219,13 @@ if __name__ == "__main__":
     parser.add_argument("--date", required=True, help="보고서 기준 날짜 (YYYY-MM-DD)")
     args = parser.parse_args()
 
-    main(args.date)
+    try:
+        main(args.date)
+    except Exception as e:
+        print(f"❌ 메인 프로세스 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 '''
