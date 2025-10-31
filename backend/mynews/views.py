@@ -68,36 +68,48 @@ from .models import Comment,news_article
 
 @api_view(['GET'])
 def article_list(request):
-    # 로그인 안되어 있을 때, 
-    articles = news_article.objects.all()[:10]
-    # serializer = ArticleListSerializer(articles, many=True, context={'user': request.user})
-    serializer = ArticleListSerializer(articles, many=True, context={'request': request})  # ✅ 수정됨
+    try:
+        # 로그인 안되어 있을 때, 
+        articles = news_article.objects.all()[:10]
+        serializer = ArticleListSerializer(articles, many=True, context={'request': request})
 
-    raw_data = serializer.data
-    response_data = {
-        "연예": [],
-        "경제": [],
-        "교육": [],
-        "국제": [],
-        "산업": [],
-        "정치": [],
-        "지역": [],
-        "건강": [],
-        "문화": [],
-        "취미": [],
-        "스포츠": [],
-        "사건사고": [],
-        "사회일반": [],
-        "IT_과학": [],
-        "여성복지": [],
-        "여행레저": [],
-        "라이프스타일": []
-    }
+        raw_data = serializer.data
+        response_data = {
+            "연예": [],
+            "경제": [],
+            "교육": [],
+            "국제": [],
+            "산업": [],
+            "정치": [],
+            "지역": [],
+            "건강": [],
+            "문화": [],
+            "취미": [],
+            "스포츠": [],
+            "사건사고": [],
+            "사회일반": [],
+            "IT_과학": [],
+            "여성복지": [],
+            "여행레저": [],
+            "라이프스타일": []
+        }
 
-    for data in raw_data:
-        response_data[data["category"]].append(data)
+        for data in raw_data:
+            category = data.get("category")
+            if category and category in response_data:
+                response_data[category].append(data)
+            else:
+                # 카테고리가 없거나 알 수 없는 경우 처리
+                if "기타" not in response_data:
+                    response_data["기타"] = []
+                response_data["기타"].append(data)
 
-    return Response(response_data)
+        return Response(response_data)
+    except Exception as e:
+        return Response(
+            {"error": f"기사 목록 조회 실패: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
     # 로그인 되어 있을 때, -> 사용자 좋아요 기반의 뉴스 큐레이팅 
 
 # /api/news/recommendation/
@@ -152,44 +164,65 @@ def article_detail(request, article_id):
         article = news_article.objects.get(id=article_id)
     except news_article.DoesNotExist:
         return Response({'error': 'Article not found'}, status=status.HTTP_404_NOT_FOUND)
-    # print("USER:", request.user)
-    # print("IS AUTH:", request.user.is_authenticated)
-    # 읽음 기록 저장
+    except ValueError:
+        return Response({'error': 'Invalid article ID'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # 읽음 기록 저장 (트랜잭션 독립적으로 처리)
     if request.user.is_authenticated:
-        # Reads.objects.get_or_create(user=request.user, article_id=article)
-        Reads.objects.create(user=request.user, article_id=article)
-        # print("e들어오긴함")
+        try:
+            from django.db import transaction
+            # 읽음 기록은 실패해도 조회는 계속되어야 하므로 독립 트랜잭션
+            with transaction.atomic():
+                Reads.objects.create(user=request.user, article_id=article)
+        except Exception as e:
+            # 읽음 기록 저장 실패는 치명적이지 않으므로 로깅만
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"읽음 기록 저장 실패 (user={request.user.id}, article={article_id}): {e}")
 
-    # 시리얼라이저로 응답 생성
-    serializer = ArticleDetailSerializer(article, context={'request': request})
-    return Response(serializer.data)
+    try:
+        # 시리얼라이저로 응답 생성
+        serializer = ArticleDetailSerializer(article, context={'request': request})
+        return Response(serializer.data)
+    except Exception as e:
+        return Response(
+            {'error': f'Serialization failed: {str(e)}'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 
 # 좋아요 + 좋아요 취소 
 @api_view(['PUT','DELETE'])
-# 유저 토큰 인증
 @permission_classes([IsAuthenticated])
 def article_like(request, article_id):
+    from django.db import transaction
+    
     user = request.user
     try:
         article = news_article.objects.get(id=article_id)
-        # article_id 랑 
-
     except news_article.DoesNotExist:
-        return Response({"error": "해당 기사가 없습니다."}, status=404)
+        return Response({"error": "해당 기사가 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError:
+        return Response({"error": "잘못된 기사 ID입니다."}, status=status.HTTP_400_BAD_REQUEST)
     
-    
-    # ✅ 좋아요가 이미 존재하면 → 삭제 (취소)
-    # ❌ 좋아요가 없으면 → 생성 (등록)
-    # db에 데이터 생성하고, created(boolean)
-    like_obj, created = Likes.objects.get_or_create(user=user, article_id=article)
+    try:
+        # 트랜잭션으로 묶어서 원자성 보장
+        with transaction.atomic():
+            # ✅ 좋아요가 이미 존재하면 → 삭제 (취소)
+            # ❌ 좋아요가 없으면 → 생성 (등록)
+            like_obj, created = Likes.objects.get_or_create(user=user, article_id=article)
 
-    if created:
-        return Response({"message": "좋아요 등록", "is_liked": True})
-    else:
-        like_obj.delete()
-        return Response({"message": "좋아요 취소", "is_liked": False})
+            if created:
+                return Response({"message": "좋아요 등록", "is_liked": True})
+            else:
+                like_obj.delete()
+                return Response({"message": "좋아요 취소", "is_liked": False})
+    except Exception as e:
+        return Response(
+            {"error": f"좋아요 처리 실패: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 # 좋아요 기반 추천
@@ -199,137 +232,180 @@ def similar_articles(request, article_id):
     try:
         target = news_article.objects.get(id=article_id)
     except news_article.DoesNotExist:
-        return Response({"error": "Article not found"}, status=400)
+        return Response({"error": "Article not found"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError:
+        return Response({"error": "Invalid article ID"}, status=status.HTTP_400_BAD_REQUEST)
 
-    similar_qs = (
-        news_article.objects
-        .exclude(id=article_id)
-        .annotate(similarity=CosineDistance('embedding', target.embedding))
-        .order_by('similarity')[:10]
-    )
+    try:
+        # embedding이 None이거나 빈 벡터인 경우 체크
+        if not target.embedding or all(v == 0.0 for v in target.embedding):
+            return Response(
+                {"error": "해당 기사의 임베딩이 없어 유사 기사를 찾을 수 없습니다."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-    # data = [
-    #     {
-    #         "id": article.id,
-    #         "title": article.title,
-    #         "similarity": round(article.similarity, 4)
-    #     }
-    #     for article in similar_qs
-    # ]
+        similar_qs = (
+            news_article.objects
+            .exclude(id=article_id)
+            .annotate(similarity=CosineDistance('embedding', target.embedding))
+            .order_by('similarity')[:10]
+        )
 
-    # return Response({"target": target.title, "similar_articles": data})
-    serializer = ArticleDetailSerializer(similar_qs, many=True, context={"request": request})
-    result = serializer.data
+        serializer = ArticleDetailSerializer(similar_qs, many=True, context={"request": request})
+        result = serializer.data
 
-    # similarity 값은 annotate 필드이므로 따로 추가
-    # for obj, article in zip(result, similar_qs):
-    #     obj["similarity"] = round(article.similarity, 4)
-
-    return Response({
-        # "target": target.title,
-        "article_list": result
-    })
+        return Response({
+            "article_list": result
+        })
+    except Exception as e:
+        return Response(
+            {"error": f"유사 기사 조회 실패: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 # /api/news/search/
 # 키워드 검색 기반
 class NewsSearchAPIView(APIView):
     def get(self, request):
-        query = request.query_params.get("q")  # ← GET 파라미터 읽기
+        query = request.query_params.get("q")
 
-        if not query:
+        if not query or not query.strip():
             return Response({"error": "검색어를 입력해주세요"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1. ES 검색
-        es = Elasticsearch("http://localhost:9200")
-        es_result = es.search(
-            # 인덱스 이름
-            index="news",
-            # 몇개 뱉어낼건지
-            size=10,
-            query={
-                # 일단 멀티 매치로 ㄱㄱ
-                "multi_match": {
-                    "query": query,
-                    "fields": ["title", "content", "keywords"]
+        try:
+            # 1. ES 검색
+            es = Elasticsearch("http://localhost:9200")
+            
+            # Elasticsearch 연결 확인
+            if not es.ping():
+                return Response(
+                    {"error": "검색 서비스에 연결할 수 없습니다."}, 
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+            
+            es_result = es.search(
+                index="news",
+                size=10,
+                query={
+                    "multi_match": {
+                        "query": query,
+                        "fields": ["title", "content", "keywords"]
+                    }
                 }
-            }
-        )
-        # unique한 url을 검색 용도로 씀
-        urls = [hit["_source"]["url"] for hit in es_result["hits"]["hits"]]
+            )
+            
+            # unique한 url을 검색 용도로 씀
+            urls = [hit["_source"]["url"] for hit in es_result["hits"]["hits"]]
 
-        # 2. PostgreSQL 조회
+            # 2. PostgreSQL 조회
+            if not urls:
+                return Response({"results": []})
 
-        # 없으면.. 없을리는 없음
-        if not urls:
-            return Response({"results": []})
+            placeholder = ','.join(['%s'] * len(urls))
+            query_sql = f"""
+                SELECT title, writer, write_date, category, url
+                FROM news_article
+                WHERE url IN ({placeholder})
+            """
 
-        placeholder = ','.join(['%s'] * len(urls))
-        # 색인 방식으로 한다 Index Scan
-        # url은 unique 속성을 가지고 있기 때문에 index가 자동 생성
-        query_sql = f"""
-            SELECT title, writer, write_date, category, url
-            FROM news_article
-            WHERE url IN ({placeholder})
-        """
+            with connection.cursor() as cursor:
+                cursor.execute(query_sql, urls)
+                rows = cursor.fetchall()
 
-        with connection.cursor() as cursor:
-            cursor.execute(query_sql, urls)
-            rows = cursor.fetchall()
-
-        # 3. 응답 정리
-        results = [
-            {
-                "title": row[0],
-                "writer": row[1],
-                "write_date": row[2],
-                "category": row[3],
-                "url": row[4],
-            }
-            for row in rows
-        ]
-        return Response({"results": results})
+            # 3. ES 순서 유지하며 응답 정리
+            url_to_row = {row[4]: row for row in rows}
+            results = []
+            for url in urls:
+                if url in url_to_row:
+                    row = url_to_row[url]
+                    results.append({
+                        "title": row[0],
+                        "writer": row[1],
+                        "write_date": row[2],
+                        "category": row[3],
+                        "url": row[4],
+                    })
+            
+            return Response({"results": results})
+            
+        except Exception as e:
+            return Response(
+                {"error": f"검색 실패: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
 
 # 댓글 생성, 삭제, 요청
 
 class NewsCommentAPIView(APIView):
     def get(self, request, article_id):
-        self.permission_classes = [AllowAny]  # 인증 없이 조회 가능
+        self.permission_classes = [AllowAny]
         self.check_permissions(request)
 
-        comments = Comment.objects.filter(article_id=article_id, parent__isnull=True).order_by("-created_at")
-        serializer = CommentSerializer(comments, many=True)
-        return Response(serializer.data)
+        try:
+            comments = Comment.objects.filter(article_id=article_id, parent__isnull=True).order_by("-created_at")
+            serializer = CommentSerializer(comments, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response(
+                {"error": f"댓글 조회 실패: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def post(self, request, article_id):
+        from django.db import transaction
+        
         self.permission_classes = [IsAuthenticated]
         self.check_permissions(request)
         
-        serializer = CommentSerializer(data=request.data)
-        if serializer.is_valid():
-            comment = serializer.save(user=request.user, article_id=article_id)
-            out_serializer = CommentSerializer(comment)
-
-            return Response(out_serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # 트랜잭션으로 묶어서 댓글 생성의 원자성 보장
+            with transaction.atomic():
+                # 기사 존재 여부 확인
+                if not news_article.objects.filter(id=article_id).exists():
+                    return Response(
+                        {"error": "존재하지 않는 기사입니다."}, 
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                serializer = CommentSerializer(data=request.data)
+                if serializer.is_valid():
+                    comment = serializer.save(user=request.user, article_id=article_id)
+                    out_serializer = CommentSerializer(comment)
+                    return Response(out_serializer.data, status=status.HTTP_201_CREATED)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": f"댓글 작성 실패: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def delete(self, request, article_id):
+        from django.db import transaction
+        
         self.permission_classes = [IsAuthenticated]
         self.check_permissions(request)
 
-        comment_id = request.data.get("id")  # 댓글 ID는 여전히 body에서 받는 걸로
+        comment_id = request.data.get("id")
         if not comment_id:
             return Response({"error": "댓글 ID가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            comment = Comment.objects.get(id=comment_id, article_id=article_id)
-            if comment.user != request.user:
-                return Response({"error": "본인 댓글만 삭제할 수 있습니다."}, status=status.HTTP_403_FORBIDDEN)
-            comment.delete()
-            return Response({"message": "삭제되었습니다."}, status=status.HTTP_204_NO_CONTENT)
+            # 트랜잭션으로 묶어서 삭제의 원자성 보장 (대댓글도 함께 삭제될 수 있음)
+            with transaction.atomic():
+                comment = Comment.objects.select_for_update().get(id=comment_id, article_id=article_id)
+                if comment.user != request.user:
+                    return Response({"error": "본인 댓글만 삭제할 수 있습니다."}, status=status.HTTP_403_FORBIDDEN)
+                comment.delete()
+                return Response({"message": "삭제되었습니다."}, status=status.HTTP_204_NO_CONTENT)
         except Comment.DoesNotExist:
             return Response({"error": "존재하지 않는 댓글입니다."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"error": f"댓글 삭제 실패: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
 
 
@@ -359,40 +435,61 @@ class ChatbotView(APIView):
     load_dotenv()
     openai_api_key = os.getenv("OPENAI_API_KEY")
     permission_classes = [IsAuthenticated]
-    def post(self, request,article_id):
-        # return Response({"message": "백엔드 통신 잘됨"}, status=status.HTTP_200_OK)
+    
+    def post(self, request, article_id):
         if not request.user.is_authenticated:
-            return Response({"message": "인증이 필요합니다."}, status=401)
+            return Response({"message": "인증이 필요합니다."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # article_id = request.data.get("article_id")
         try:
             article = news_article.objects.get(id=article_id)
         except news_article.DoesNotExist:
-            return Response({"message": "해당 뉴스 기사를 찾을 수 없습니다."}, status=400)
+            return Response({"message": "해당 뉴스 기사를 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        except ValueError:
+            return Response({"message": "잘못된 기사 ID입니다."}, status=status.HTTP_400_BAD_REQUEST)
+        
         question = request.data.get("message")
 
-        if not all([article.title, article.write_date, article.content, question]):
-            print("hello")
-            return Response({"message": "입력값이 부족합니다."}, status=400)
+        if not question or not question.strip():
+            return Response({"message": "질문을 입력해주세요."}, status=status.HTTP_400_BAD_REQUEST)
 
-        session_key = f"chat_history_{request.user.id}_{article_id}"
-        if session_key not in request.session:
-            prompt = f"""너는 친절한 뉴스 비서 <소봇>이야.
-                - 뉴스 기사 내용을 바탕으로 사용자의 질문에 쉽고 친절하게 대답해줘.
-                - 기사의 내용에 없는 정보는 "죄송해요, 여기 보고계신 기사에서는 찾을 수 없네요."라고 말해줘. 
-                기사 제목: {article.title}, 작성일: {article.write_date}, 내용: {article.content}"""
-            request.session[session_key] = [SystemMessage(content=prompt)]
+        if not all([article.title, article.content]):
+            return Response({"message": "기사 정보가 불완전합니다."}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            session_key = f"chat_history_{request.user.id}_{article_id}"
+            
+            # 세션 초기화 (dict 형태로 저장)
+            if session_key not in request.session:
+                prompt = f"""너는 친절한 뉴스 비서 <소봇>이야.
+                    - 뉴스 기사 내용을 바탕으로 사용자의 질문에 쉽고 친절하게 대답해줘.
+                    - 기사의 내용에 없는 정보는 "죄송해요, 여기 보고계신 기사에서는 찾을 수 없네요."라고 말해줘. 
+                    기사 제목: {article.title}, 작성일: {article.write_date}, 내용: {article.content}"""
+                request.session[session_key] = [{"role": "system", "content": prompt}]
 
-        messages = request.session.get(session_key, [])
-        messages.append(HumanMessage(content=question))
-        llm = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"))
-        answer = llm.invoke(messages[-20:])  # 최근 20개만 사용
+            # 세션에서 메시지 히스토리 가져오기
+            messages_dict = request.session.get(session_key, [])
+            messages = [dict_to_message(d) for d in messages_dict]
+            messages.append(HumanMessage(content=question))
+            
+            # LLM 호출
+            llm = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"), timeout=30.0)
+            answer = llm.invoke(messages[-20:])
 
-        # ✅ 응답 메시지 추가
-        messages.append(AIMessage(content=answer.content))
+            # 응답 메시지 추가
+            messages.append(AIMessage(content=answer.content))
 
-        # ✅ 세션에 dict 형태로 저장 (LangChain 객체 직접 저장 ❌)
-        request.session[session_key] = [message_to_dict(m) for m in messages]
+            # 세션에 dict 형태로 저장
+            request.session[session_key] = [message_to_dict(m) for m in messages]
 
-        return Response({"message": answer.content})
+            return Response({"message": answer.content})
+            
+        except TimeoutError:
+            return Response(
+                {"message": "응답 시간이 초과되었습니다. 다시 시도해주세요."}, 
+                status=status.HTTP_504_GATEWAY_TIMEOUT
+            )
+        except Exception as e:
+            return Response(
+                {"message": f"챗봇 응답 생성 실패: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

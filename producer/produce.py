@@ -30,12 +30,20 @@ logger = logging.getLogger(__name__)
 
 context = ssl._create_unverified_context()
 
-# 환경 변수에서 설정 로드
-KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "news-raw")
-RSS_FETCH_INTERVAL = int(os.getenv("RSS_FETCH_INTERVAL", "300"))  # 5분
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+# 환경 변수에서 설정 로드 (예외처리 포함)
+try:
+    KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "news-raw")
+    RSS_FETCH_INTERVAL = int(os.getenv("RSS_FETCH_INTERVAL", "300"))  # 5분
+    MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+    REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+except ValueError as e:
+    logger.error(f"환경 변수 파싱 오류: {e}. 기본값 사용")
+    KAFKA_BROKER = "localhost:9092"
+    KAFKA_TOPIC = "news-raw"
+    RSS_FETCH_INTERVAL = 300
+    MAX_RETRIES = 3
+    REQUEST_TIMEOUT = 30
 
 CATEGORY_RSS = {
     "최신": "https://www.yna.co.kr/rss/news.xml",
@@ -215,18 +223,33 @@ def collect_and_send_news():
                         category_failed += 1
                         continue
                     
+                    # 필수 필드 검증
+                    if not article.get('url') or not article.get('title'):
+                        logger.warning(f"필수 필드 누락: {article}")
+                        category_failed += 1
+                        continue
+                    
                     # Kafka로 전송
-                    key = quote(article['url'])  # URL을 키로 사용 (중복 방지)
-                    future = producer.send(KAFKA_TOPIC, key=key, value=article)
+                    try:
+                        key = article['url']  # URL을 키로 사용 (중복 방지)
+                        future = producer.send(KAFKA_TOPIC, key=key, value=article)
+                        
+                        # 전송 결과 확인 (비동기)
+                        record_metadata = future.get(timeout=10)
+                        logger.info(f"✅ 전송 성공: {article['title'][:50]}... "
+                                  f"(토픽: {record_metadata.topic}, 파티션: {record_metadata.partition})")
+                        
+                        category_sent += 1
+                        total_sent += 1
+                    except TimeoutError:
+                        logger.error(f"❌ Kafka 전송 타임아웃: {article['title'][:50]}...")
+                        category_failed += 1
+                        total_failed += 1
                     
-                    # 전송 결과 확인 (비동기)
-                    record_metadata = future.get(timeout=10)
-                    logger.info(f"✅ 전송 성공: {article['title'][:50]}... "
-                              f"(토픽: {record_metadata.topic}, 파티션: {record_metadata.partition})")
-                    
-                    category_sent += 1
-                    total_sent += 1
-                    
+                except AttributeError as e:
+                    logger.error(f"❌ entry 속성 오류: {e}")
+                    category_failed += 1
+                    total_failed += 1
                 except Exception as e:
                     logger.error(f"❌ 기사 전송 실패: {entry.title if hasattr(entry, 'title') else 'unknown'} - {e}")
                     category_failed += 1

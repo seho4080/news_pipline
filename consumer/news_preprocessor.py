@@ -48,6 +48,7 @@ def extract_writer(content: str) -> str:
 def insert_article(pool, row):
     """
     row keys: title, writer, write_date(dt), category, content, url, keywords(any), embedding(list[float])
+    트랜잭션 안전성을 보장하며 DB에 삽입
     """
     conn = pool.getconn()
     try:
@@ -81,8 +82,22 @@ def insert_article(pool, row):
                     json.dumps(row["embedding"])  # jsonb 컬럼 권장
                 ))
         conn.commit()
+    except Exception as e:
+        # 트랜잭션 롤백
+        try:
+            conn.rollback()
+            log.error(f"DB 삽입 실패, 롤백 완료: {e}")
+        except Exception as rollback_error:
+            log.error(f"롤백 실패: {rollback_error}")
+        raise  # 예외를 다시 발생시켜 호출자가 처리하도록
     finally:
-        pool.putconn(conn)
+        # 커넥션 상태 확인 후 풀에 반환
+        try:
+            if conn.closed:
+                log.warning("커넥션이 닫혀있음, 새 커넥션 필요")
+            pool.putconn(conn)
+        except Exception as e:
+            log.error(f"커넥션 풀 반환 실패: {e}")
 
 def upsert_es(session: requests.Session, doc: dict, doc_id: str):
     """
