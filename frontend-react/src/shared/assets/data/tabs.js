@@ -1,5 +1,5 @@
 export const tabs = [
-  { id: 1, label: "전체", value: "" },
+  { id: 1, label: "전체", value: "", showCount: true },
   { id: 2, label: "연예", value: "연예" },
   { id: 3, label: "경제", value: "경제" },
   { id: 4, label: "교육", value: "교육" },

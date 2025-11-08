@@ -6,23 +6,43 @@ import './NewsView.scss'
 
 const NewsView = () => {
   const [newsData, setNewsData] = useState([])
+  const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const processNewsData = (rawData) => {
+    console.log('===== 백엔드 응답 rawData =====', rawData)
+    console.log('rawData 타입:', typeof rawData)
+    console.log('rawData 키 목록:', Object.keys(rawData))
+    console.log('rawData 키 개수:', Object.keys(rawData).length)
+    
     const { tabs } = require('../../shared/assets/data/tabs')
+    console.log('tabs 길이:', tabs.length)
+    
     const initialNewsData = Array.from({ length: tabs.length }, () => ({
       rawData: [],
       latest: [],
       recommend: [],
       totalPageValue: 0
     }))
+    console.log('initialNewsData 길이:', initialNewsData.length)
 
     const keys = Object.keys(rawData)
+    console.log('처리할 키들:', keys)
 
     // 키워드 별 기사 처리 로직
     keys.forEach((key, idx) => {
+      console.log(`\n--- 처리 중: key=${key}, idx=${idx} ---`)
       const items = rawData[key]
+      console.log(`${key} 기사 개수:`, items.length)
+      console.log(`접근할 배열 인덱스: initialNewsData[${idx + 1}]`)
+      console.log(`배열 범위 체크: ${idx + 1} < ${initialNewsData.length} = ${idx + 1 < initialNewsData.length}`)
+      
+      // 안전 검사: initialNewsData 범위 확인
+      if (idx + 1 >= initialNewsData.length) {
+        console.error(`❌ Index out of bounds: ${idx + 1} for key: ${key}`)
+        return
+      }
 
       items.forEach(item => {
         initialNewsData[0].rawData.push(item)
@@ -47,6 +67,14 @@ const NewsView = () => {
       initialNewsData[idx + 1].latest = latestChunk
       initialNewsData[idx + 1].recommend = recommendChunk
       initialNewsData[idx + 1].totalPageValue = latestChunk.length
+    })
+
+    console.log('\n===== 처리 완료된 initialNewsData =====')
+    console.log('전체 기사 수:', initialNewsData[0].rawData.length)
+    initialNewsData.forEach((data, idx) => {
+      if (idx > 0 && data.rawData.length > 0) {
+        console.log(`카테고리 ${idx}: ${data.rawData.length}개 기사`)
+      }
     })
 
     // 전체 기사 처리
@@ -77,7 +105,12 @@ const NewsView = () => {
         setLoading(true)
         setError(null)
         const response = await newsApi.getNewsList()
-        const processedData = processNewsData(response.data)
+        
+        // total_count 추출
+        const { total_count, ...newsCategories } = response.data
+        setTotalCount(total_count || 0)
+        
+        const processedData = processNewsData(newsCategories)
         setNewsData(processedData)
       } catch (error) {
         console.error('뉴스 데이터 로드 실패:', error)
@@ -185,7 +218,7 @@ const NewsView = () => {
         </header>
         
         <main className="page-main">
-          <NewsListWidget newsData={newsData} />
+          <NewsListWidget newsData={newsData} totalCount={totalCount} />
         </main>
       </div>
     </div>

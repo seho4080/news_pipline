@@ -69,42 +69,78 @@ from .models import Comment,news_article
 @api_view(['GET'])
 def article_list(request):
     try:
-        # 로그인 안되어 있을 때, 
-        articles = news_article.objects.all()[:10]
+        # 페이지네이션 파라미터
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 1000))  # 기본값 1000으로 증가
+        category = request.query_params.get('category', None)
+        
+        # 페이지 시작/끝 계산
+        start = (page - 1) * page_size
+        end = start + page_size
+        
+        # 기본 쿼리 (최신순 정렬)
+        queryset = news_article.objects.all().order_by('-write_date')
+        
+        # 카테고리 필터링 (선택적)
+        if category and category != 'all':
+            queryset = queryset.filter(category=category)
+        
+        # 전체 개수
+        total_count = queryset.count()
+        
+        # 페이지네이션 적용
+        articles = queryset[start:end]
         serializer = ArticleListSerializer(articles, many=True, context={'request': request})
 
         raw_data = serializer.data
-        response_data = {
-            "연예": [],
-            "경제": [],
-            "교육": [],
-            "국제": [],
-            "산업": [],
-            "정치": [],
-            "지역": [],
-            "건강": [],
-            "문화": [],
-            "취미": [],
-            "스포츠": [],
-            "사건사고": [],
-            "사회일반": [],
-            "IT_과학": [],
-            "여성복지": [],
-            "여행레저": [],
-            "라이프스타일": []
-        }
+        
+        # 프론트엔드 tabs 순서와 일치하도록 OrderedDict 사용
+        from collections import OrderedDict
+        response_data = OrderedDict([
+            ("연예", []),
+            ("경제", []),
+            ("교육", []),
+            ("국제", []),
+            ("산업", []),
+            ("정치", []),
+            ("지역", []),
+            ("건강", []),
+            ("문화", []),
+            ("취미", []),
+            ("스포츠", []),
+            ("사건사고", []),
+            ("사회일반", []),
+            ("IT_과학", []),
+            ("여성복지", []),
+            ("여행레저", []),
+            ("라이프스타일", [])
+        ])
 
         for data in raw_data:
-            category = data.get("category")
-            if category and category in response_data:
-                response_data[category].append(data)
+            cat = data.get("category")
+            if cat and cat in response_data:
+                response_data[cat].append(data)
             else:
                 # 카테고리가 없거나 알 수 없는 경우 처리
                 if "기타" not in response_data:
                     response_data["기타"] = []
                 response_data["기타"].append(data)
 
-        return Response(response_data)
+        # 페이지네이션 메타데이터는 헤더로 전송
+        total_pages = (total_count + page_size - 1) // page_size
+        
+        # 응답 데이터에 총 개수 추가
+        response_data["total_count"] = total_count
+        
+        response = Response(response_data)
+        response['X-Total-Count'] = str(total_count)
+        response['X-Total-Pages'] = str(total_pages)
+        response['X-Current-Page'] = str(page)
+        response['X-Page-Size'] = str(page_size)
+        response['X-Has-Next'] = 'true' if page < total_pages else 'false'
+        response['X-Has-Prev'] = 'true' if page > 1 else 'false'
+        
+        return response
     except Exception as e:
         return Response(
             {"error": f"기사 목록 조회 실패: {str(e)}"}, 
@@ -237,8 +273,8 @@ def similar_articles(request, article_id):
         return Response({"error": "Invalid article ID"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # embedding이 None이거나 빈 벡터인 경우 체크
-        if not target.embedding or all(v == 0.0 for v in target.embedding):
+        # embedding이 None인 경우 체크
+        if target.embedding is None:
             return Response(
                 {"error": "해당 기사의 임베딩이 없어 유사 기사를 찾을 수 없습니다."}, 
                 status=status.HTTP_400_BAD_REQUEST

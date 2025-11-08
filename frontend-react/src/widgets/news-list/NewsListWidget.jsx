@@ -5,7 +5,7 @@ import { useNewsFilter, NewsFilterControls } from '../../features/filter-news/in
 import { tabs } from '../../shared/assets/data/tabs'
 import './NewsListWidget.scss'
 
-export const NewsListWidget = ({ newsData }) => {
+export const NewsListWidget = ({ newsData, totalCount = 0 }) => {
   const {
     activeTab,
     sortBy,
@@ -80,6 +80,7 @@ export const NewsListWidget = ({ newsData }) => {
               className="category-tab"
             >
               {tab.label}
+              {tab.showCount && totalCount > 0 && ` (${totalCount})`}
             </StateButton>
           ))}
         </div>

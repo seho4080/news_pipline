@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -101,11 +102,11 @@ WSGI_APPLICATION = "myproject.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "news",
-        "USER": "ssafyuser",
-        "PASSWORD": "ssafy",
-        "HOST": "localhost",
-        "PORT": 5432,
+        "NAME": os.environ.get("DB_NAME", "newsdb"),
+        "USER": os.environ.get("DB_USERNAME", "newsuser"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", "newspass"),
+        "HOST": os.environ.get("DB_HOST", "postgres"),
+        "PORT": int(os.environ.get("DB_PORT", "5432")),
     }
 }
 

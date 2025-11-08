@@ -72,8 +72,8 @@ def insert_article(pool, row):
                 # embedding을 jsonb(text)나 float[]로 보관하는 경우(간단)
                 cur.execute("""
                     INSERT INTO news_article
-                        (title, writer, write_date, category, content, url, keywords, embedding)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        (title, writer, write_date, category, content, url, keywords, embedding, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s, CURRENT_TIMESTAMP)
                     ON CONFLICT (url) DO NOTHING
                 """, (
                     row["title"], row["writer"], row["write_date"], row["category"],
