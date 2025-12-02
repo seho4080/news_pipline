@@ -1,5 +1,5 @@
 # news_processor.py
-import os, json, re, time, logging, datetime
+import os, json, re, time, logging, datetime, signal, sys, csv
 from urllib.parse import quote
 from dotenv import load_dotenv
 from confluent_kafka import Consumer, KafkaException, Producer
@@ -12,6 +12,35 @@ from preprocess import Preprocess  # 기존 전처리 그대로 사용
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("news-processor")
+
+# 글로벌 통계
+stats = {
+    'total_consumed': 0,
+    'total_processed': 0,
+    'db_success': 0,
+    'db_failed': 0,
+    'es_success': 0,
+    'es_failed': 0,
+    'preprocess_failed': 0,
+    'json_decode_failed': 0,
+    'start_time': None,
+    'by_category': {},
+    'last_save_count': 0  # 마지막 저장 시점의 처리 건수
+}
+
+# 통계 저장 주기 (처리한 메시지 개수 기준)
+SAVE_INTERVAL = 5  # 5개 처리할 때마다 저장
+
+# 로그 디렉토리 및 파일 경로
+# Docker 환경에서는 /app/logs, 로컬에서는 ../logs 사용
+LOG_DIR = os.getenv('LOG_DIR', '/app/logs')
+LOG_FILE = os.path.join(LOG_DIR, 'consumer_stats.csv')
+
+# 로그 디렉토리 생성
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except Exception as e:
+    log.warning(f"로그 디렉토리 생성 실패: {e}")
 
 # ---- ENV
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
@@ -108,7 +137,120 @@ def upsert_es(session: requests.Session, doc: dict, doc_id: str):
     if not r.ok:
         raise RuntimeError(f"ES upsert failed: {r.status_code} {r.text[:200]}")
 
+def save_statistics_to_csv():
+    """통계를 CSV 파일에 저장"""
+    try:
+        log.info(f"📝 CSV 저장 시도: {LOG_FILE}")
+        log.info(f"📂 LOG_DIR exists: {os.path.exists(LOG_DIR)}")
+        
+        # 파일이 없으면 헤더 작성
+        write_header = not os.path.exists(LOG_FILE)
+        log.info(f"✍️ Write header: {write_header}")
+        
+        with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            if write_header:
+                writer.writerow([
+                    '종료시각', '실행시간(초)', '소비_메시지', '전처리_성공', 
+                    'DB_성공', 'DB_실패', 'DB_성공률(%)',
+                    'ES_성공', 'ES_실패', 'ES_성공률(%)',
+                    'JSON_디코드_실패', '전처리_실패',
+                    '카테고리별_상세'
+                ])
+            
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            runtime = int(time.time() - stats['start_time']) if stats['start_time'] else 0
+            
+            db_rate = 0
+            if stats['db_success'] + stats['db_failed'] > 0:
+                db_rate = (stats['db_success'] / (stats['db_success'] + stats['db_failed'])) * 100
+            
+            es_rate = 0
+            if stats['es_success'] + stats['es_failed'] > 0:
+                es_rate = (stats['es_success'] / (stats['es_success'] + stats['es_failed'])) * 100
+            
+            # 카테고리별 상세 정보를 JSON 형태로
+            category_details = json.dumps(stats['by_category'], ensure_ascii=False)
+            
+            writer.writerow([
+                timestamp,
+                runtime,
+                stats['total_consumed'],
+                stats['total_processed'],
+                stats['db_success'],
+                stats['db_failed'],
+                f"{db_rate:.2f}",
+                stats['es_success'],
+                stats['es_failed'],
+                f"{es_rate:.2f}",
+                stats['json_decode_failed'],
+                stats['preprocess_failed'],
+                category_details
+            ])
+        
+        log.info(f"✅ 통계가 파일에 저장됨: {LOG_FILE}")
+    except Exception as e:
+        log.error(f"❌ CSV 파일 저장 실패: {e}", exc_info=True)
+
+def print_final_statistics():
+    """종료 시 최종 통계 출력"""
+    log.info("\n" + "="*70)
+    log.info("📊 뉴스 Consumer 최종 통계")
+    log.info("="*70)
+    
+    if stats['start_time']:
+        runtime = time.time() - stats['start_time']
+        hours, remainder = divmod(int(runtime), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        log.info(f"⏱️  총 실행 시간: {hours}시간 {minutes}분 {seconds}초")
+    
+    log.info(f"📥 총 소비 메시지: {stats['total_consumed']}개")
+    log.info(f"✅ 전처리 성공: {stats['total_processed']}개")
+    log.info(f"❌ JSON 디코드 실패: {stats['json_decode_failed']}개")
+    log.info(f"❌ 전처리 실패: {stats['preprocess_failed']}개")
+    
+    log.info(f"\n💾 PostgreSQL:")
+    log.info(f"  ✅ 삽입 성공: {stats['db_success']}개")
+    log.info(f"  ❌ 삽입 실패: {stats['db_failed']}개")
+    if stats['db_success'] + stats['db_failed'] > 0:
+        db_rate = (stats['db_success'] / (stats['db_success'] + stats['db_failed'])) * 100
+        log.info(f"  📈 성공률: {db_rate:.2f}%")
+    
+    log.info(f"\n🔍 Elasticsearch:")
+    log.info(f"  ✅ 색인 성공: {stats['es_success']}개")
+    log.info(f"  ❌ 색인 실패: {stats['es_failed']}개")
+    if stats['es_success'] + stats['es_failed'] > 0:
+        es_rate = (stats['es_success'] / (stats['es_success'] + stats['es_failed'])) * 100
+        log.info(f"  📈 성공률: {es_rate:.2f}%")
+    
+    if stats['by_category']:
+        log.info("\n📂 카테고리별 통계:")
+        log.info("-" * 70)
+        for category, count in sorted(stats['by_category'].items(), key=lambda x: x[1], reverse=True):
+            log.info(f"  {category:12s} | {count:4d}개")
+    
+    log.info("="*70)
+    log.info("👋 Consumer 종료")
+    log.info("="*70 + "\n")
+
+def signal_handler(signum, frame):
+    """시그널 핸들러 (Ctrl+C 처리)"""
+    log.info("\n⚠️  종료 신호 감지됨 (Ctrl+C)")
+    save_statistics_to_csv()
+    print_final_statistics()
+    sys.exit(0)
+
 def main():
+    # 시그널 핸들러 등록
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    stats['start_time'] = time.time()
+    
+    # 프로그램 시작 시 초기 CSV 파일 생성 (헤더만)
+    save_statistics_to_csv()
+    
     # Kafka consumer(수동 커밋)
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BOOTSTRAP,
@@ -129,7 +271,8 @@ def main():
     gpt = Preprocess()
 
     consumer.subscribe([IN_TOPIC])
-    log.info(f"Consuming from {IN_TOPIC}; writing to Postgres & ES(index={ES_INDEX})")
+    log.info("🚀 뉴스 Consumer 시작")
+    log.info(f"설정: Kafka={KAFKA_BOOTSTRAP}, Topic={IN_TOPIC}, DB={DB_HOST}/{DB_NAME}, ES={ES_INDEX}")
 
     try:
         while True:
@@ -141,9 +284,12 @@ def main():
                     log.error(f"Kafka error: {msg.error()}")
                 continue
 
+            stats['total_consumed'] += 1
+            
             try:
                 data = json.loads(msg.value().decode("utf-8"))
             except Exception as e:
+                stats['json_decode_failed'] += 1
                 log.exception("JSON 디코드 실패")
                 if producer:
                         if producer is not None and DLQ_TOPIC:
@@ -164,7 +310,9 @@ def main():
                 keywords  = gpt.transform_extract_keywords(content)
                 category  = gpt.transform_classify_category(content)
                 embedding = gpt.transform_to_embedding(content)
+                stats['total_processed'] += 1
             except Exception as e:
+                stats['preprocess_failed'] += 1
                 log.exception(f"전처리 실패 url={url}")
                 if producer:
                         if producer is not None and DLQ_TOPIC:
@@ -183,10 +331,17 @@ def main():
                 "embedding": embedding,
             }
 
+            # 카테고리별 통계 업데이트
+            if category not in stats['by_category']:
+                stats['by_category'][category] = 0
+            stats['by_category'][category] += 1
+            
             # 1) Postgres INSERT (성공해야 다음 단계로)
             try:
                 insert_article(pool, row)
+                stats['db_success'] += 1
             except Exception as e:
+                stats['db_failed'] += 1
                 log.exception(f"DB 삽입 실패 url={url} → 재시도(커밋 안함)")
                 time.sleep(1)
                 continue  # 커밋 X → 재처리
@@ -205,7 +360,9 @@ def main():
                     "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
                 }
                 upsert_es(session, doc, doc_id)
+                stats['es_success'] += 1
             except Exception as e:
+                stats['es_failed'] += 1
                 # ES 실패 시 선택지:
                 # - 커밋하지 않고 재시도(정합↑, 정체 가능)
                 # - DLQ로 보내고 커밋(정합↓, 유실 방지)
@@ -220,12 +377,24 @@ def main():
             # 3) 성공적으로 PG+ES 처리 완료 → 오프셋 커밋
             consumer.commit(msg)
             log.info(f"✔ stored & indexed: {title}")
+            
+            # 주기적으로 통계 저장 (5개 처리할 때마다)
+            if stats['total_consumed'] - stats['last_save_count'] >= SAVE_INTERVAL:
+                save_statistics_to_csv()
+                stats['last_save_count'] = stats['total_consumed']
+                log.info(f"📊 중간 통계 저장 완료 (처리: {stats['total_consumed']}개)")
 
+    except KeyboardInterrupt:
+        log.info("\n⚠️  사용자에 의해 중단됨")
+        save_statistics_to_csv()
+        print_final_statistics()
     finally:
+        log.info("리소스 정리 중...")
         consumer.close()
         if producer: producer.flush(5)
         session.close()
         pool.closeall()
+        log.info("리소스 정리 완료")
 
 if __name__ == "__main__":
     main()

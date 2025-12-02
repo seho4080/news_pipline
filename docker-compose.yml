@@ -150,6 +150,8 @@ services:
       KAFKA_TOPIC: news-raw
       DLQ_TOPIC: news-dlq
       RSS_FETCH_INTERVAL: ${RSS_FETCH_INTERVAL:-300}
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       kafka:
         condition: service_healthy
@@ -175,6 +177,8 @@ services:
       ES_BASE_URL: http://elasticsearch:9200
       ES_INDEX: news
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       kafka:
         condition: service_healthy

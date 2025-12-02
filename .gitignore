@@ -239,3 +239,4 @@ playwright/.cache/
 # Vitest
 coverage/
 .vitest/
+logs/

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { setAuthToken } from '../../shared/api/base'
 import './Login.scss'
 
 const Login = () => {
@@ -38,12 +39,15 @@ const Login = () => {
       localStorage.setItem('access_token', accessToken)
       localStorage.setItem('refresh_token', refreshToken)
 
-      // 2. axios 기본 Authorization 설정
+      // 2. API 인스턴스에 토큰 설정 (중요!)
+      setAuthToken(accessToken)
+      
+      // 3. axios 기본 Authorization 설정 (하위 호환성)
       axios.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
       
       alert("로그인 성공!")
 
-      // 3. 페이지 이동
+      // 4. 페이지 이동
       navigate('/', { replace: true })
     } catch (error) {
       const message = '아이디 또는 비밀번호가 올바르지 않습니다.'

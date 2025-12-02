@@ -3,12 +3,15 @@ import os
 import json
 import time
 import logging
+import csv
 import feedparser
 import urllib.request
 import ssl
 import requests
 from bs4 import BeautifulSoup
 import re
+import signal
+import sys
 from kafka import KafkaProducer
 from dotenv import load_dotenv
 from datetime import datetime
@@ -16,6 +19,25 @@ from urllib.parse import quote
 
 # 환경 변수 로드
 load_dotenv()
+
+# 통계 변수 (전역)
+stats = {
+    'total_sent': 0,
+    'total_failed': 0,
+    'start_time': None,
+    'by_category': {}
+}
+
+# 로그 디렉토리 및 파일 경로
+# Docker 환경에서는 /app/logs, 로컬에서는 ../logs 사용
+LOG_DIR = os.getenv('LOG_DIR', '/app/logs')
+LOG_FILE = os.path.join(LOG_DIR, 'producer_stats.csv')
+
+# 로그 디렉토리 생성
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except Exception as e:
+    print(f"로그 디렉토리 생성 실패: {e}")
 
 # 로깅 설정
 logging.basicConfig(
@@ -199,12 +221,14 @@ def create_kafka_producer():
 def collect_and_send_news():
     """뉴스를 수집하고 Kafka로 전송"""
     producer = create_kafka_producer()
-    total_sent = 0
-    total_failed = 0
     
     try:
         for category, url in CATEGORY_RSS.items():
             logger.info(f"📰 [{category}] 카테고리 뉴스 수집 시작...")
+            
+            # 카테고리별 통계 초기화
+            if category not in stats['by_category']:
+                stats['by_category'][category] = {'sent': 0, 'failed': 0}
             
             # RSS 피드 가져오기
             feed = fetch_rss(url)
@@ -240,26 +264,34 @@ def collect_and_send_news():
                                   f"(토픽: {record_metadata.topic}, 파티션: {record_metadata.partition})")
                         
                         category_sent += 1
-                        total_sent += 1
+                        stats['total_sent'] += 1
                     except TimeoutError:
                         logger.error(f"❌ Kafka 전송 타임아웃: {article['title'][:50]}...")
                         category_failed += 1
-                        total_failed += 1
+                        stats['total_failed'] += 1
                     
                 except AttributeError as e:
                     logger.error(f"❌ entry 속성 오류: {e}")
                     category_failed += 1
-                    total_failed += 1
+                    stats['total_failed'] += 1
                 except Exception as e:
                     logger.error(f"❌ 기사 전송 실패: {entry.title if hasattr(entry, 'title') else 'unknown'} - {e}")
                     category_failed += 1
-                    total_failed += 1
+                    stats['total_failed'] += 1
+            
+            # 카테고리별 통계 업데이트
+            stats['by_category'][category]['sent'] += category_sent
+            stats['by_category'][category]['failed'] += category_failed
             
             logger.info(f"📊 [{category}] 완료 - 성공: {category_sent}, 실패: {category_failed}")
+            
+            # 각 카테고리 수집 후 바로 저장
+            save_statistics_to_csv()
+            
             time.sleep(1)  # 카테고리 간 간격
         
         # 전체 결과 로깅
-        logger.info(f"🎯 뉴스 수집 완료 - 총 성공: {total_sent}, 총 실패: {total_failed}")
+        logger.info(f"🎯 뉴스 수집 완료 - 총 성공: {stats['total_sent']}, 총 실패: {stats['total_failed']}")
         
     finally:
         # Producer 종료
@@ -268,10 +300,101 @@ def collect_and_send_news():
         logger.info("Kafka Producer 종료됨")
 
 
+def save_statistics_to_csv():
+    """통계를 CSV 파일에 저장"""
+    try:
+        logger.info(f"📝 CSV 저장 시도: {LOG_FILE}")
+        logger.info(f"📂 LOG_DIR exists: {os.path.exists(LOG_DIR)}")
+        
+        # 파일이 없으면 헤더 작성
+        write_header = not os.path.exists(LOG_FILE)
+        logger.info(f"✍️ Write header: {write_header}")
+        
+        with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            if write_header:
+                writer.writerow([
+                    '종료시각', '실행시간(초)', '총_전송_성공', '총_전송_실패', 
+                    '성공률(%)', '카테고리별_상세'
+                ])
+            
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            runtime = int(time.time() - stats['start_time']) if stats['start_time'] else 0
+            success_rate = 0
+            if stats['total_sent'] + stats['total_failed'] > 0:
+                success_rate = (stats['total_sent'] / (stats['total_sent'] + stats['total_failed'])) * 100
+            
+            # 카테고리별 상세 정보를 JSON 형태로
+            category_details = json.dumps(stats['by_category'], ensure_ascii=False)
+            
+            writer.writerow([
+                timestamp,
+                runtime,
+                stats['total_sent'],
+                stats['total_failed'],
+                f"{success_rate:.2f}",
+                category_details
+            ])
+        
+        logger.info(f"✅ 통계가 파일에 저장됨: {LOG_FILE}")
+    except Exception as e:
+        logger.error(f"❌ CSV 파일 저장 실패: {e}", exc_info=True)
+
+def print_final_statistics():
+    """종료 시 최종 통계 출력"""
+    logger.info("\n" + "="*70)
+    logger.info("📊 뉴스 Producer 최종 통계")
+    logger.info("="*70)
+    
+    if stats['start_time']:
+        runtime = time.time() - stats['start_time']
+        hours, remainder = divmod(int(runtime), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        logger.info(f"⏱️  총 실행 시간: {hours}시간 {minutes}분 {seconds}초")
+    
+    logger.info(f"✅ 총 전송 성공: {stats['total_sent']}개")
+    logger.info(f"❌ 총 전송 실패: {stats['total_failed']}개")
+    
+    if stats['total_sent'] + stats['total_failed'] > 0:
+        success_rate = (stats['total_sent'] / (stats['total_sent'] + stats['total_failed'])) * 100
+        logger.info(f"📈 성공률: {success_rate:.2f}%")
+    
+    if stats['by_category']:
+        logger.info("\n📂 카테고리별 통계:")
+        logger.info("-" * 70)
+        for category, data in stats['by_category'].items():
+            total = data['sent'] + data['failed']
+            if total > 0:
+                rate = (data['sent'] / total) * 100
+                logger.info(f"  {category:12s} | 성공: {data['sent']:4d} | 실패: {data['failed']:4d} | 성공률: {rate:5.1f}%")
+    
+    logger.info("="*70)
+    logger.info("👋 Producer 종료")
+    logger.info("="*70 + "\n")
+
+
+def signal_handler(signum, frame):
+    """시그널 핸들러 (Ctrl+C 처리)"""
+    logger.info("\n⚠️  종료 신호 감지됨 (Ctrl+C)")
+    save_statistics_to_csv()
+    print_final_statistics()
+    sys.exit(0)
+
+
 def main():
     """메인 실행 함수"""
+    # 시그널 핸들러 등록
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    stats['start_time'] = time.time()
+    
     logger.info("🚀 뉴스 Producer 시작")
     logger.info(f"설정: Kafka={KAFKA_BROKER}, Topic={KAFKA_TOPIC}, Interval={RSS_FETCH_INTERVAL}s")
+    
+    # 프로그램 시작 시 초기 CSV 파일 생성 (헤더만)
+    save_statistics_to_csv()
     
     while True:
         try:
@@ -279,13 +402,18 @@ def main():
             collect_and_send_news()
             elapsed_time = time.time() - start_time
             
+            # 매 수집 후 통계를 CSV에 저장
+            save_statistics_to_csv()
+            
             logger.info(f"⏱️ 수집 완료 (소요시간: {elapsed_time:.2f}초)")
             logger.info(f"😴 다음 수집까지 {RSS_FETCH_INTERVAL}초 대기...")
             
             time.sleep(RSS_FETCH_INTERVAL)
             
         except KeyboardInterrupt:
-            logger.info("사용자에 의해 중단됨")
+            logger.info("\n⚠️  사용자에 의해 중단됨")
+            save_statistics_to_csv()
+            print_final_statistics()
             break
         except Exception as e:
             logger.error(f"예상치 못한 오류: {e}")
