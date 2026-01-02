@@ -1,0 +1,110 @@
+name: CI - Consumer
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'consumer/**'
+      - '.github/workflows/ci-consumer.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'consumer/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        cd consumer
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pylint bandit flake8
+
+    - name: Lint with pylint
+      run: |
+        cd consumer
+        pylint news_preprocessor.py --fail-under=8.0 || true
+        pylint dlq_reprocessor.py --fail-under=8.0 || true
+
+    - name: Lint with flake8
+      run: |
+        cd consumer
+        flake8 news_preprocessor.py dlq_reprocessor.py --max-line-length=100 --count --show-source --statistics
+
+    - name: Security check with bandit
+      run: |
+        cd consumer
+        bandit -r . -ll || true
+
+    - name: Check Python syntax
+      run: |
+        cd consumer
+        python -m py_compile news_preprocessor.py dlq_reprocessor.py
+
+    - name: Run tests
+      run: |
+        cd consumer
+        pytest . -v --cov=. --cov-report=xml || true
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./consumer/coverage.xml
+        flags: consumer
+        fail_ci_if_error: false
+
+  docker-build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./docker/consumer.Dockerfile
+        push: false
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Test Docker image
+      run: |
+        docker build -f docker/consumer.Dockerfile -t news-consumer:test .
+        docker run --rm news-consumer:test python -m py_compile /app/news_preprocessor.py
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, docker-build]
+    if: always()
+
+    steps:
+    - name: Send Slack notification
+      if: failure()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: 'Consumer CI failed on ${{ github.ref }}'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

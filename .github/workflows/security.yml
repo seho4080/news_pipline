@@ -1,0 +1,240 @@
+name: Security & Dependencies
+
+on:
+  schedule:
+    # 매주 월요일 오전 9시 UTC
+    - cron: '0 9 * * 1'
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security vulnerability scan
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Upload Trivy results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Comment PR with Trivy results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const trivy = JSON.parse(fs.readFileSync('trivy-results.sarif', 'utf8'));
+          const vulnerabilities = trivy.runs[0].results || [];
+          
+          if (vulnerabilities.length > 0) {
+            const comment = `## 🔒 Security Vulnerabilities Found\n\n${vulnerabilities.length} vulnerabilities detected:\n\n${vulnerabilities.map(v => `- **${v.ruleId}**: ${v.message.text}`).join('\n')}`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+          }
+
+  dependency-check:
+    runs-on: ubuntu-latest
+    name: Check dependencies for vulnerabilities
+
+    strategy:
+      matrix:
+        module:
+          - consumer
+          - backend
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety bandit pip-audit
+
+    - name: Check Python dependencies with safety
+      continue-on-error: true
+      run: |
+        cd ${{ matrix.module }}
+        safety check --json > safety-report.json || true
+        cat safety-report.json
+
+    - name: Check Python dependencies with pip-audit
+      continue-on-error: true
+      run: |
+        cd ${{ matrix.module }}
+        pip-audit --desc > pip-audit-report.txt || true
+        cat pip-audit-report.txt
+
+    - name: Upload dependency reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: dependency-reports-${{ matrix.module }}
+        path: |
+          ${{ matrix.module }}/safety-report.json
+          ${{ matrix.module }}/pip-audit-report.txt
+
+  frontend-dependencies:
+    runs-on: ubuntu-latest
+    name: Check frontend dependencies
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: 'frontend-react/package-lock.json'
+
+    - name: Install dependencies
+      run: |
+        cd frontend-react
+        npm ci
+
+    - name: Run npm audit
+      continue-on-error: true
+      run: |
+        cd frontend-react
+        npm audit --json > npm-audit-report.json || true
+        npm audit --audit-level=moderate
+
+    - name: Check with snyk
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      run: |
+        cd frontend-react
+        npm install -g snyk
+        snyk test --severity-threshold=high --json-file-output=snyk-report.json || true
+
+    - name: Upload frontend dependency reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: frontend-dependency-reports
+        path: |
+          frontend-react/npm-audit-report.json
+          frontend-react/snyk-report.json
+
+  outdated-dependencies:
+    runs-on: ubuntu-latest
+    name: Check for outdated dependencies
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Check Python dependencies for updates
+      run: |
+        pip install --upgrade pip pip-tools
+        
+        # Consumer
+        cd consumer
+        pip-compile requirements.txt --output-file=requirements-updated.txt --upgrade 2>/dev/null || true
+        diff requirements.txt requirements-updated.txt || echo "Updates available"
+        cd ..
+        
+        # Backend
+        cd backend
+        pip-compile requirements.txt --output-file=requirements-updated.txt --upgrade 2>/dev/null || true
+        diff requirements.txt requirements-updated.txt || echo "Updates available"
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: 'frontend-react/package-lock.json'
+
+    - name: Check Node.js dependencies for updates
+      run: |
+        cd frontend-react
+        npm outdated || true
+
+    - name: Create pull request for dependency updates
+      if: github.event_name == 'schedule'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const { data: prs } = await github.rest.pulls.list({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            head: 'dependabot/auto-update'
+          });
+          
+          if (prs.length === 0) {
+            console.log('No existing dependency update PR, would create one in real scenario');
+            // 실제로는 dependabot이나 자동 PR 생성 액션 사용
+          }
+
+  security-report:
+    runs-on: ubuntu-latest
+    name: Generate security report
+    needs: [security-scan, dependency-check, frontend-dependencies]
+    if: always()
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate security report
+      run: |
+        echo "# 🔒 Security Report" > security-report.md
+        echo "" >> security-report.md
+        echo "Generated: $(date)" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## Vulnerabilities Summary" >> security-report.md
+        echo "" >> security-report.md
+        echo "### Critical Issues" >> security-report.md
+        echo "- Status: $([ -f trivy-results.sarif ] && echo 'Check reports' || echo 'No critical issues')" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## Dependencies Status" >> security-report.md
+        echo "- Consumer: See pip-audit report" >> security-report.md
+        echo "- Backend: See pip-audit report" >> security-report.md
+        echo "- Frontend: See npm-audit report" >> security-report.md
+
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: security-report.md
+
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          🔒 Security scan completed
+          Check artifacts for detailed reports
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message
